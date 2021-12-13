@@ -1,2 +1,182 @@
 # Auto-WordPress-Ubuntu-20
 Auto Install WordPress on Ubuntu 20 via AWS
+
+#!/bin/bash
+  
+printf "$(whoami) Init Launch Script \n" > /tmp/launchScript.log
+
+
+
+
+### Parameters w/ default Args
+DB_NAME=${DB_NAME:-wpdb}
+DB_USER=${DB_USER:-wpuser}
+DB_PASS=${DB_PASS:-$(< /dev/urandom tr -dc _A-Z-a-z-0-9 | head -c16)}
+WP_URL=${WP_URL:-$(curl -s 'https://api.ipify.org')}
+
+# Assign parameters w/ manual passed in values
+while [ $# -gt 0 ]; do
+	if [[ $1 == *"--"* ]]; then
+		param="${1/--/}"
+		declare $param="$2"
+	fi
+
+	shift
+done
+
+printf "Passed in Args \nDB_NAME:${DB_NAME}\nDB_USER:${DB_USER}\nDB_PASS:${DB_PASS}\nWP_URL:${WP_URL}\n" >> /tmp/launchScript.log
+#echo ${DB_PASS}
+#echo ${DB_USER}
+#echo ${DB_NAME}
+#echo ${WP_URL}
+
+
+
+
+### Create Swap Memory (Additional Memory) 2GB
+printf "Creating 2GB Swap Memory\n" >> /tmp/launchScript.log &&
+sudo fallocate -l 2G /swapfile &&
+sudo chmod 600 /swapfile &&
+sudo mkswap /swapfile &&
+sudo swapon /swapfile &&
+echo "/swapfile swap swap defaults 0 0" | sudo tee -a /etc/fstab 
+
+
+
+
+### Update Ubuntu 20
+printf "Updating & Upgrading Ubuntu 20\n" >> /tmp/launchScript.log &&
+sudo apt update && 
+sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y -o Dpkg::Options::='--force-confold' -o Dpkg::Options::='--force-confdef' 
+
+
+
+
+
+### Install Glances
+printf "Installing Glances\n" >> /tmp/launchScript.log &&
+sudo apt install -y glances 
+
+
+
+
+### Install PHP
+printf "Installing PHP\n" >> /tmp/launchScript.log &&
+sudo apt install -y php php-mysql php-curl php-xml php-mbstring php-zip php-gd php-imagick
+### Possible Install more PHP extensions
+#libapache2-mod-php php-xmlrpc php-soap php-intl 
+
+
+
+
+### Install Apache2
+sudo apt install -y apache2 && 
+printf "Installed Apache2\n" >> /tmp/launchScript.log &&
+sed -i \
+-e 's/StartServers[^:].*/StartServers 2/' \
+-e 's/MinSpareServers[^:].*/MinSpareServers 1/' \
+-e 's/MaxSpareServers[^:].*/MaxSpareServers 10/' \
+-e 's/MaxRequestWorkers[^:].*/MaxRequestWorkers 50/' \
+-e 's/MaxConnectionsPerChild[^:].*/MaxConnectionsPerChild 500/' \
+/etc/apache2/mods-available/mpm_prefork.conf &&
+printf "Optimized Apache2\n" >> /tmp/launchScript.log &&
+
+### Create Virtual Host for Wordpress (Apache2)
+printf "Creating Virtual Folders\n" >> /tmp/launchScript.log &&
+sudo mkdir /var/www/wordpress &&
+sudo chown -R www-data:www-data /var/www/wordpress &&
+printf "Created Virtual Host\n" >> /tmp/launchScript.log &&
+(sudo tee /etc/apache2/sites-available/wordpress.conf <<TXT
+    <VirtualHost *:80>
+        ServerName localhost
+        ServerAlias www.localhost
+        ServerAdmin webmaster@localhost
+        DocumentRoot /var/www/wordpress
+        ErrorLog ${APACHE_LOG_DIR}/error.log
+        CustomLog ${APACHE_LOG_DIR}/access.log combined
+		
+        <Directory /var/www/wordpress/>
+            AllowOverride All
+        </Directory>
+    </VirtualHost>
+TXT
+)&&
+sudo a2ensite wordpress &&
+sudo a2enmod rewrite &&
+sudo a2dissite 000-default && 
+sudo apache2ctl configtest && 
+sudo systemctl reload apache2 &&
+printf "Restart Aapache\n" >> /tmp/launchScript.log 
+
+
+
+
+### Install MariaDB
+printf "Installing MariaDB\n" >> /tmp/launchScript.log &&
+sudo apt install -y mariadb-server &&
+echo -e "\nn\ny\ny\ny\ny\n" | sudo mysql_secure_installation &&
+
+### Optimize MariaDB (Small Server)
+printf "Optimizing MariaDB\n" >> /tmp/launchScript.log &&
+sed -i \
+-e 's/.*key_buffer_size.*/key_buffer_size = 16M/' \
+-e 's/query_cache_size.*/query_cache_size = 2M/' \
+-e 's/#query_cache_limit.*/query_cache_limit = 1M/' \
+-e 's/#max_connections.*/max_connections = 25 \
+\nperformance_schema = off \
+\ntmp_table_size = 1M \
+\ninnodb_buffer_pool_size = 1M \
+\ninnodb_log_buffer_size = 1M \
+\nsort_buffer_size = 512M \
+\nread_buffer_size = 256K \
+\nread_rnd_buffer_size = 512K \
+\njoin_buffer_size = 128K \
+\nthread_stack = 196K/' \
+/etc/mysql/mariadb.conf.d/50-server.cnf &&
+
+### Create DB User & Table for Wordpress
+printf "Creating DB User & Table\n" >> /tmp/launchScript.log &&
+sudo mariadb -e "CREATE DATABASE ${DB_NAME};" &&
+sudo mariadb -e "CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';" &&
+sudo mariadb -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO ${DB_USER}@localhost;" &&
+sudo mariadb -e "FLUSH PRIVILEGES;" 
+
+
+
+
+### Install Wordpress
+printf "Installing Wordpress\n" >> /tmp/launchScript.log &&
+curl https://wordpress.org/latest.tar.gz --output /tmp/latest.tar.gz &&
+tar xzvf /tmp/latest.tar.gz --directory /tmp/ &&
+touch /tmp/wordpress/.htaccess &&
+cp /tmp/wordpress/wp-config-sample.php /tmp/wordpress/wp-config.php &&
+mkdir /tmp/wordpress/wp-content/upgrade &&
+sudo cp -a /tmp/wordpress/. /var/www/wordpress &&
+sudo chown -R www-data:www-data /var/www/wordpress &&
+sudo find /var/www/wordpress/ -type d -exec chmod 750 {} \; &&
+sudo find /var/www/wordpress/ -type f -exec chmod 640 {} \; &&
+ 
+### Set Wordpress Salt
+printf "Setting Wordpress Salt\n" >> /tmp/launchScript.log &&
+SALT=$(curl -L https://api.wordpress.org/secret-key/1.1/salt/) &&
+STRING='put your unique phrase here' &&
+printf '%s\n' "g/$STRING/d" a "$SALT" . w | ed -s /var/www/wordpress/wp-config.php &&
+#https://stackoverflow.com/questions/6233398/download-and-insert-salt-string-inside-wordpress-wp-config-php-with-bash
+
+### Set Wordpress DB
+sudo printf "Setting Wordpress Database Config\n" >> /tmp/launchScript.log &&
+sudo printf '%b\n' "g/DB_NAME/d" a "define( 'DB_NAME', '$DB_NAME' );\n" . w | ed -s /var/www/wordpress/wp-config.php &&
+sudo printf '%b\n' "g/DB_USER/d" a "define( 'DB_USER', '$DB_USER' );\n" . w | ed -s /var/www/wordpress/wp-config.php &&
+sudo printf '%b\n' "g/DB_PASSWORD/d" a "define( 'DB_PASSWORD', '$DB_PASS' );\n" . w | ed -s /var/www/wordpress/wp-config.php &&
+
+### Set Wordpress URL
+printf "Setting Wordpress URL\n" >> /tmp/launchScript.log &&
+sudo printf '%b\n' "g/WP_DEBUG/" a "define('WP_HOME','http://$WP_URL');\ndefine('WP_SITEURL','http://$WP_URL');" . w | ed -s /var/www/wordpress/wp-config.php
+#define('FS_METHOD', 'direct'); maybe add
+
+
+
+### Server Completed
+printf "Your Server is Complete!!!\nRebooting" >> /tmp/launchScript.log && 
+sudo cp /tmp/launchScript.log /home/ubuntu/launchScript.log &&
+sudo reboot
