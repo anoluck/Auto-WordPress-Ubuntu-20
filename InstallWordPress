@@ -125,7 +125,7 @@ sed -i \
 -e 's/#max_connections.*/max_connections = 25 \
 \nperformance_schema = off \
 \ntmp_table_size = 1M \
-\ninnodb_buffer_pool_size = 1M \
+\ninnodb_buffer_pool_size = 5M \
 \ninnodb_log_buffer_size = 1M \
 \nsort_buffer_size = 512M \
 \nread_buffer_size = 256K \
@@ -178,5 +178,4 @@ sudo printf '%b\n' "g/WP_DEBUG/" a "define('WP_HOME','http://$WP_URL');\ndefine(
 
 ### Server Completed
 printf "Your Server is Complete!!!\nRebooting" >> /tmp/launchScript.log && 
-sudo cp /tmp/launchScript.log /home/ubuntu/launchScript.log &&
-sudo reboot
+sudo cp /tmp/launchScript.log /home/ubuntu/launchScript.log 
